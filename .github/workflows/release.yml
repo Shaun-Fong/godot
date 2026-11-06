@@ -1,0 +1,143 @@
+name: 🚀 Release
+on:
+  push:
+    tags: ["*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  SCONS_FLAGS: module_text_server_fb_enabled=yes debug_symbols=no
+  SCONS_CACHE_MSVC_CONFIG: "true"
+  PYTHONIOENCODING: utf8
+
+jobs:
+  windows-release:
+    name: 🏁 Windows release
+    runs-on: windows-latest
+    timeout-minutes: 240
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          submodules: recursive
+
+      - name: Restore Godot build cache
+        uses: ./.github/actions/godot-cache-restore
+        with:
+          cache-name: windows-release
+        continue-on-error: true
+
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+
+      - name: Download pre-built ANGLE
+        shell: sh
+        id: angle-sdk
+        run: |
+          if python ./misc/scripts/install_angle.py; then
+            echo "ANGLE_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::ANGLE SDK installation failed, building without ANGLE support."
+            echo "ANGLE_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download pre-built AccessKit
+        shell: sh
+        id: accesskit-sdk
+        run: |
+          if python ./misc/scripts/install_accesskit.py; then
+            echo "ACCESSKIT_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::AccessKit SDK installation failed, building without AccessKit support."
+            echo "ACCESSKIT_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build editor
+        uses: ./.github/actions/godot-build
+        with:
+          target: editor
+          platform: windows
+          scons-flags: ${{ env.SCONS_FLAGS }} d3d12=no angle=${{ steps.angle-sdk.outputs.ANGLE_ENABLED }} accesskit=${{ steps.accesskit-sdk.outputs.ACCESSKIT_ENABLED }}
+
+      - name: Build debug export template
+        uses: ./.github/actions/godot-build
+        with:
+          target: template_debug
+          platform: windows
+          scons-flags: ${{ env.SCONS_FLAGS }} d3d12=no angle=${{ steps.angle-sdk.outputs.ANGLE_ENABLED }} accesskit=${{ steps.accesskit-sdk.outputs.ACCESSKIT_ENABLED }}
+
+      - name: Build release export template
+        uses: ./.github/actions/godot-build
+        with:
+          target: template_release
+          platform: windows
+          scons-flags: ${{ env.SCONS_FLAGS }} d3d12=no angle=${{ steps.angle-sdk.outputs.ANGLE_ENABLED }} accesskit=${{ steps.accesskit-sdk.outputs.ACCESSKIT_ENABLED }}
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          foreach ($target in "editor", "template_debug", "template_release") {
+            & "./bin/godot.windows.$target.x86_64.console.exe" --version
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: Save Godot build cache
+        uses: ./.github/actions/godot-cache-save
+        with:
+          cache-name: windows-release
+        continue-on-error: true
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = python -c "import version; n='%d.%d' % (version.major, version.minor); n += '.%d' % version.patch if version.patch else ''; print(n + '.' + version.status + version.module_config)"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Write-Host "Version: $version"
+
+          New-Item -ItemType Directory -Force dist, editor-pkg, package/templates | Out-Null
+
+          $tag = $env:RELEASE_TAG
+          Copy-Item bin/godot.windows.editor.x86_64.exe "editor-pkg/Godot_${tag}_win64.exe"
+          Copy-Item bin/godot.windows.editor.x86_64.console.exe "editor-pkg/Godot_${tag}_win64_console.exe"
+          Copy-Item bin/godot.windows.template_debug.x86_64.exe package/templates/windows_debug_x86_64.exe
+          Copy-Item bin/godot.windows.template_debug.x86_64.console.exe package/templates/windows_debug_x86_64.console.exe
+          Copy-Item bin/godot.windows.template_release.x86_64.exe package/templates/windows_release_x86_64.exe
+          Copy-Item bin/godot.windows.template_release.x86_64.console.exe package/templates/windows_release_x86_64.console.exe
+          Set-Content package/templates/version.txt -Value $version -NoNewline -Encoding ascii
+
+          Push-Location editor-pkg
+          7z a -tzip "../dist/Godot_${tag}_win64.zip" *
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
+
+          Push-Location package
+          7z a -tzip "../dist/Godot_${tag}_export_templates.tpz" templates
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
+
+      - name: Create or update release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          $assets = @("dist/Godot_${tag}_win64.zip", "dist/Godot_${tag}_export_templates.tpz")
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets --title $tag --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
