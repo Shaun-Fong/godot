@@ -124,8 +124,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Pop-Location
 
-      - name: Upload artifacts
+      - name: Upload editor artifact
         uses: ./.github/actions/upload-artifact
         with:
           name: Godot_${{ github.event.inputs.tag || github.ref_name }}_win64
-          path: dist/*
+          path: dist/*_win64.zip
+
+      - name: Upload export templates artifact
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: Godot_${{ github.event.inputs.tag || github.ref_name }}_export_templates
+          path: dist/*_export_templates.tpz
