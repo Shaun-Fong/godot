@@ -2,7 +2,7 @@ name: 🔗 GHA
 on:
   push:
     # Releases are built by release.yml, avoid building everything twice for tags.
-    tags-ignore: ["*"]
+    branches: ["**"]
   pull_request:
   merge_group:
   workflow_dispatch:
