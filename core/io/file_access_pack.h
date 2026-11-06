@@ -37,12 +37,12 @@
 #include "core/templates/hash_set.h"
 #include "core/templates/list.h"
 
-// Godot's packed file magic header ("GDPC" in ASCII).
-#define PACK_HEADER_MAGIC 0x43504447
+// Custom build: non-standard magic (djb2 of "shaunfong") so generic PCK tools can't recognize the header.
+#define PACK_HEADER_MAGIC 0x847EBD0E
 
 #define PACK_FORMAT_VERSION_V2 2
 #define PACK_FORMAT_VERSION_V3 3
-#define PACK_FORMAT_VERSION_V4 4
+#define PACK_FORMAT_VERSION_V4 0x5C1E7B93 // Custom build: non-standard version, links the pack to this build.
 
 // The current packed file format version number.
 #define PACK_FORMAT_VERSION PACK_FORMAT_VERSION_V4
